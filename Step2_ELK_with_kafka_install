@@ -1,0 +1,209 @@
+# References : https://logz.io/blog/deploying-kafka-with-elk/
+# https://dzone.com/articles/deploying-kafka-with-the-elk-stack
+#  Connect to compute engine created in gcloud (review Step1 on how to connect from laptop)
+# Add PGP keys
+    wget -qO - https://artifacts.elastic.co/GPG-KEY-elasticsearch | sudo apt-key add -
+    echo "deb https://artifacts.elastic.co/packages/7.x/apt stable main" | sudo tee -a /etc/apt/sources.list.d/elastic-7.x.list
+
+# For installing Elasticsearch on Debian, we also need to install the apt-transport-https package:
+    sudo apt-get update
+    sudo apt-get install apt-transport-https
+
+# Install Elasticsearch
+    sudo apt-get update && sudo apt-get install elasticsearch
+
+# Update elasticsearchyml before bootstrapping it
+    vim /etc/elasticsearch/elasticsearch.yml
+     grep -v ^# /etc/elasticsearch/elasticsearch.yml |grep -v ^$
+        path.data: /var/lib/elasticsearch
+        path.logs: /var/log/elasticsearch
+        network.host: "0.0.0.0"
+        http.port: 9200
+        cluster.initial_master_nodes: ["10.182.0.3"] # Private ip of the compute engine 
+
+# Start elasticsearch 
+    sudo service elasticsearch start
+    curl http://10.182.0.3:9200
+
+    e.g. output:
+            {
+        "name" : "elkvm01",
+        "cluster_name" : "elasticsearch",
+        "cluster_uuid" : "0YF7AyHzRDaX1PnlcPOthg",
+        "version" : {
+            "number" : "7.17.6",
+            "build_flavor" : "default",
+            "build_type" : "deb",
+            "build_hash" : "f65e9d338dc1d07b642e14a27f338990148ee5b6",
+            "build_date" : "2022-08-23T11:08:48.893373482Z",
+            "build_snapshot" : false,
+            "lucene_version" : "8.11.1",
+            "minimum_wire_compatibility_version" : "6.8.0",
+            "minimum_index_compatibility_version" : "6.0.0-beta1"
+        },
+        "tagline" : "You Know, for Search"
+        }
+
+
+# Install Java (needed for Logstash and Kafka)
+    sudo apt-get install default-jre
+    java -version
+        openjdk version "11.0.16" 2022-07-19
+        OpenJDK Runtime Environment (build 11.0.16+8-post-Debian-1deb11u1)
+        OpenJDK 64-Bit Server VM (build 11.0.16+8-post-Debian-1deb11u1, mixed mode, sharing)
+
+
+# Install logstash 
+# Since we already defined the repository in the system, all we have to do to install Logstash is run:
+    sudo apt-get install logstash
+    grep -v ^# /etc/logstash/logstash.yml |grep -v ^$
+        node.name: logstashvm
+        path.data: /var/lib/logstash
+        path.logs: /var/log/logstash
+
+
+# Install logstash pipeline to pull form kafka topic
+    vim /etc/logstash/conf.d/apache.conf
+    more /etc/logstash/conf.d/apache.conf
+        input {
+        kafka {
+            bootstrap_servers => "10.182.0.3:9092"  => IP address of kafka and port
+            topics => "apache"
+            }
+        }
+
+        filter {
+        grok {
+            match => { "message" => "%{COMBINEDAPACHELOG}" }
+        }
+        date {
+            match => [ "timestamp", "dd/MMM/yyy:HH:mm:ss Z" ]
+        }
+        geoip {
+            source => "clientip"
+        }
+        }
+        output {
+        elasticsearch {
+        hosts => ["10.182.0.3:9200"]  => IP address of elasticsearch 
+        }
+        }
+
+
+# Install Kibana
+    sudo apt-get install kibana
+    grep -v ^# /etc/kibana/kibana.yml |grep -v ^$
+        server.port: 5601  => Kibana port 
+        server.host: "0.0.0.0"
+        server.name: "kibanavm"
+        elasticsearch.hosts: ["http://10.182.0.3:9200"]  => IP addr of elasticsearch
+
+# Start Kibana
+    sudo service kibana start
+    Open up Kibana in your browser with: http://10.182.0.3:5601. You will be presented with the Kibana home page.        
+
+# Install Filebeat
+    sudo apt-get install filebeat
+    sed 's/^[[:blank:]]*//;s/[[:blank:]]*$//' < /etc/filebeat/filebeat.yml  |grep -v ^# |grep -v ^$
+        filebeat.inputs:
+        - type: log
+          enabled: true
+          paths:
+            - /var/log/apache2/access.log
+
+        output.kafka:
+          codec.format:
+            string: '%{[@timestamp]}%{[message]}'
+          hosts: ["10.182.0.3:9092"]
+          topic: apache
+          partition.round_robin:
+            reachable_only: false
+          required_acks: 1
+          compression: gzip
+          max_message_bytes: 1000000
+
+        filebeat.config.modules:
+          path: ${path.config}/modules.d/*.yml
+          reload.enabled: false
+
+        setup.template.settings:
+          index.number_of_shards: 1
+        
+        setup.kibana:
+        
+        processors:
+          - add_host_metadata:
+              when.not.contains.tags: forwarded
+          - add_cloud_metadata: ~
+          - add_docker_metadata: ~
+          - add_kubernetes_metadata: ~
+
+In the input section, we are telling Filebeat what logs to collect — apache access logs. In the output section, we are telling Filebeat to forward the data to our local Kafka server and the relevant topic (to be installed in the next step).
+Note the use of the codec.format directive — this is to make sure the message and timestamp fields are extracted correctly. Otherwise, the lines are sent in JSON to Kafka.
+
+
+# Install zookeeper 
+Kafka uses ZooKeeper for maintaining configuration information and synchronization so we’ll need to install ZooKeeper before setting up Kafka
+
+    sudo apt-get install zookeeperd
+    grep -v ^# /opt/kafka/config/zookeeper.properties |grep -v ^$
+        dataDir=/tmp/zookeeper
+        clientPort=2181
+        maxClientCnxns=0
+
+
+# Install kafka 
+     curl "https://archive.apache.org/dist/kafka/2.1.1/kafka_2.11-2.1.1.tgz" -o ~/Downloads/kafka.tgz
+     tar -xvzf kafka.tgz
+     sudo cp -r kafka /opt/kafka
+
+      grep -v ^# /opt/kafka/config/server.properties |grep -v ^$
+        broker.id=0
+        num.network.threads=3
+        num.io.threads=8
+        socket.send.buffer.bytes=102400
+        socket.receive.buffer.bytes=102400
+        socket.request.max.bytes=104857600
+        log.dirs=/tmp/kafka-logs
+        num.partitions=1
+        num.recovery.threads.per.data.dir=1
+        offsets.topic.replication.factor=1
+        transaction.state.log.replication.factor=1
+        transaction.state.log.min.isr=1
+        log.retention.hours=168
+        log.segment.bytes=1073741824
+        log.retention.check.interval.ms=300000
+        zookeeper.connect=10.182.0.3:2181  => zookeper address
+        zookeeper.connection.timeout.ms=6000
+        group.initial.rebalance.delay.ms=0
+
+
+#  Start Kafka
+    sudo /opt/kafka/bin/kafka-server-start.sh
+
+You should begin to see some INFO messages in your console:
+
+
+# Create apache topic
+    bin/kafka-topics.sh --create --zookeeper 10.182.0.3:2181 --replication-factor 1 --partitions 1 --topic apache
+    bin/kafka-topics.sh --describe --topic apache --bootstrap-server 10.182.0.3:9092
+
+# Start the datapipeline
+
+Now that we have all the pieces in place, it’s time to start all the components in charge of running the data pipeline.
+    sudo service filebeat start
+    sudo service logstash start
+
+Verify consumer:
+    /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server 10.182.0.3:9092 --topic apache --from-beginning
+
+
+To make sure Logstash is aggregating the data and shipping it into Elasticsearch, use:
+    curl -X GET "localhost:9200/_cat/indices?v"
+
+#  Add to kibana and monitor
+
+All we have to do now is define the index pattern in Kibana to begin analysis. This is done under Management → Kibana Index Patterns.
+Kibana will identify the index, so simply define it in the relevant field and continue on to the next step of selecting the timestamp field:
+Once you create the index pattern, you’ll see a list of all the parsed and mapped fields:
+Open the Discover page to begin analyzing your data!

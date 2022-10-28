@@ -1,0 +1,57 @@
+# References https://cloud.google.com/sdk/docs/install-sdk
+
+## Gcloud CLI install
+Step 1:
+Windows
+    Download the Gcloud CLI installer https://dl.google.com/dl/cloudsdk/channels/rapid/GoogleCloudSDKInstaller.exe
+    
+    Or script using 
+    
+    (New-Object Net.WebClient).DownloadFile("https://dl.google.com/dl/cloudsdk/channels/rapid/GoogleCloudSDKInstaller.exe", "$env:Temp\GoogleCloudSDKInstaller.exe")
+    & $env:Temp\GoogleCloudSDKInstaller.exe
+
+Install (select python , if not already installed ) the CLI
+
+Step 2:
+Start the Cloud CLI Shell (available after install)
+Initialize the gcloud CLI:
+    > gcloud init --console-only
+Accept the option to log in using your Google user account:
+    > To continue, you must log in. Would you like to log in (Y/n)? Y 
+
+At the command prompt, select a Google Cloud project from the list of projects where you have Owner, Editor or Viewer permissions:
+    Pick cloud project to use:
+    [1] [my-project-1]
+    [2] [my-project-2]
+    ...
+     Please enter your numeric choice:
+If you have the Compute Engine API enabled, gcloud init allows you to choose a default Compute Engine zone:
+    Which compute zone would you like to use as project default?
+    [1] [asia-east1-a]
+    [2] [asia-east1-b]
+    ...
+    [14] Do not use default zone
+    Please enter your numeric choice:
+
+# Verify Install
+Run
+    gcloud auth list
+    gcloud config list
+    gcloud info 
+In general 
+    gcloud help 
+    For e..g: gcloud help compute instances create
+
+# Install components (as needed)
+    gcloud components list
+    gcloud components install kubectl
+    gcloud components update
+    gcloud components remove 
+
+# To delete project
+    Manage Resouces > select project > Delete
+
+
+# To connect to VM (Unix)
+From GUI console the command can be copied by navigating to the compute engine > tiple ... > ssh 
+    gcloud compute ssh --zone "us-west4-b" "elkvm01"  --project "gcloud-111111-elk"
